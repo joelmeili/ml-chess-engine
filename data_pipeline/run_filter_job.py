@@ -5,11 +5,10 @@ Usage (from the project root, after `hf auth login`):
 """
 
 import sys
-from pathlib import Path
 
 from huggingface_hub import Volume, get_token, run_uv_job
 
-SCRIPT = Path(__file__).with_name("filter_job.py")
+SCRIPT = "https://raw.githubusercontent.com/joelmeili/ml-chess-engine/refs/heads/main/data_pipeline/filter_job.py"
 
 def main() -> None:
     years = sys.argv[1:]
@@ -24,7 +23,7 @@ def main() -> None:
 
     for year in years:
         job = run_uv_job(
-            str(SCRIPT),
+            SCRIPT,
             script_args = [year],
             flavor = "cpu-upgrade",
             timeout = "4h",
