@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ML Chess Engine</title>
+  <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 520px; margin: 2rem auto; }
+    #board { width: 480px; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; }
+    #status { margin-top: 1rem; min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <h1>Play against your engine</h1>
+
+  <div class="controls">
+    <label>Engine <select id="engine"></select></label>
+    <label>Color
+      <select id="color">
+        <option value="w">White</option>
+        <option value="b">Black</option>
+      </select>
+    </label>
+    <label>Engine time limit (s) <input id="time" type="number" value="1" min="0.1" max="10" step="0.1"></label>
+    <button id="new-game">New game</button>
+  </div>
+
+  <div id="board"></div>
+  <div id="status"></div>
+
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+  <script>
+    const game = new Chess();   // the game state and rules (like python-chess)
+    let playerColor = "w";
+    let engineThinking = false;
+    let gameId = 0;             // increases with every new game
+
+    const board = Chessboard("board", {
+      draggable: true,
+      position: "start",
+      pieceTheme: "https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png",
+      onDragStart: onDragStart,
+      onDrop: onDrop,
+      onSnapEnd: () => board.position(game.fen()),
+      onMouseoverSquare: onMouseoverSquare,
+      onMouseoutSquare: onMouseoutSquare,
+    });
+
+    // Called when you start dragging a piece: return false to forbid it.
+    function onDragStart(source, piece) {
+      if (game.game_over() || engineThinking) return false;
+      if (game.turn() !== playerColor) return false;
+      if (piece[0] !== playerColor) return false;   // piece names look like "wN" or "bP"
+    }
+
+    // Called when you drop a piece: check legality with chess.js.
+    function onDrop(source, target) {
+      removeHighlights();
+      const move = game.move({ from: source, to: target, promotion: "q" });
+      if (move === null) return "snapback";   // illegal move: piece jumps back
+      updateStatus();
+      requestEngineMove();
+    }
+
+    async function requestEngineMove() {
+      if (game.game_over()) return;
+      const thisGame = gameId;
+      engineThinking = true;
+      setStatus("Engine is thinking…");
+
+      try {
+        const response = await fetch("/move", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fen: game.fen(),
+            engine: document.getElementById("engine").value,
+            time_limit: parseFloat(document.getElementById("time").value),
+          }),
+        });
+
+        if (thisGame !== gameId) return;   // a new game was started meanwhile
+
+        if (!response.ok) {
+          const error = await response.json();
+          setStatus("Error: " + JSON.stringify(error.detail));
+          return;
+        }
+
+        const data = await response.json();
+        if (data.move) {
+          game.move({
+            from: data.move.slice(0, 2),
+            to: data.move.slice(2, 4),
+            promotion: data.move[4],   // e.g. "q" in "e7e8q", otherwise undefined
+          });
+          board.position(game.fen());
+        }
+        updateStatus();
+      } catch (error) {
+        setStatus("Could not reach the server.");
+      } finally {
+        if (thisGame === gameId) engineThinking = false;
+      }
+    }
+
+    function updateStatus() {
+      if (game.in_checkmate()) {
+        setStatus((game.turn() === "w" ? "Black" : "White") + " wins by checkmate.");
+      } else if (game.in_stalemate()) {
+        setStatus("Draw by stalemate.");
+      } else if (game.in_threefold_repetition()) {
+        setStatus("Draw by repetition.");
+      } else if (game.in_draw()) {
+        setStatus("Draw.");
+      } else {
+        const side = game.turn() === "w" ? "White" : "Black";
+        setStatus(side + " to move" + (game.in_check() ? " (check)" : ""));
+      }
+    }
+
+    function setStatus(text) {
+      document.getElementById("status").textContent = text;
+    }
+
+    function newGame() {
+      gameId++;
+      game.reset();
+      playerColor = document.getElementById("color").value;
+      board.orientation(playerColor === "w" ? "white" : "black");
+      board.position("start");
+      engineThinking = false;
+      updateStatus();
+      if (playerColor === "b") requestEngineMove();   // engine plays White's first move
+    }
+
+    const LIGHT_HIGHLIGHT = "#a9a9a9";
+    const DARK_HIGHLIGHT = "#696969";
+
+    // shade one square, using a darker grey on dark squares so the highlight is visible.
+    function highlightSquare(square) {
+      const $square = $("#board .square-" + square);
+      const isDark = $square.hasClass("black-3c85d");
+      $square.css("background", isDark ? DARK_HIGHLIGHT : LIGHT_HIGHLIGHT);
+    }
+
+    function removeHighlights() {
+      $("#board .square-55d63").css("background", "");
+    }
+
+    function onMouseoverSquare(square, piece) {
+      if (engineThinking || game.game_over() || game.turn() !== playerColor) return;
+
+      // All legal moves starting from the square under the mouse.
+      const moves = game.moves({ square: square, verbose: true });
+      if (moves.length === 0) return;
+
+      highlightSquare(square);
+      for (const move of moves) {
+        highlightSquare(move.to);
+      }
+    }
+
+    function onMouseoutSquare(square, piece) {
+      removeHighlights();
+    }
+
+    async function loadEngines() {
+      const response = await fetch("/engines");
+      const engines = await response.json();
+      const select = document.getElementById("engine");
+      for (const engine of engines) {
+        const option = document.createElement("option");
+        option.value = engine.id;
+        option.textContent = engine.name;
+        select.appendChild(option);
+      }
+    }
+
+    document.getElementById("new-game").addEventListener("click", newGame);
+    loadEngines();
+    updateStatus();
+  </script>
+</body>
+</html>

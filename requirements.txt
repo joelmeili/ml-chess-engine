@@ -1,0 +1,10 @@
+chess
+pytorch
+numpy
+pytest
+fastapi
+uvicorn
+tqdm
+polars
+transformers
+duckdb
